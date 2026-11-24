@@ -66,7 +66,7 @@ mod dpapi {
 
     pub fn protect(plain: &[u8]) -> Result<Vec<u8>, String> {
         unsafe {
-            let mut input = Blob {
+            let input = Blob {
                 cb_data: plain.len() as u32,
                 pb_data: plain.as_ptr() as *mut u8,
             };
@@ -94,7 +94,7 @@ mod dpapi {
 
     pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
         unsafe {
-            let mut input = Blob {
+            let input = Blob {
                 cb_data: data.len() as u32,
                 pb_data: data.as_ptr() as *mut u8,
             };
