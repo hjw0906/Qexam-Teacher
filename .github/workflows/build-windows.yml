@@ -78,7 +78,7 @@ jobs:
         with:
           name: Qexam-Teacher-Windows
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
           path: |
             artifacts/Qexam-Teacher-Setup.exe
             artifacts/Qexam-Teacher.msi
