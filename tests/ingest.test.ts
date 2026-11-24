@@ -183,6 +183,9 @@ describe("analysis planning for long passages", () => {
     freeSource: "catalog",
     textCapable: true,
     inputTokenLimit: 1_000_000,
+    pricing: null,
+    freeAvailable: true,
+    paidAvailable: false,
   };
 
   it("keeps a short passage in a single request", () => {

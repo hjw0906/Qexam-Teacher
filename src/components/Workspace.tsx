@@ -25,6 +25,8 @@ import { useAiStore } from "../store/aiStore";
 import { WORKSPACE_TABS, type WorkspaceTab } from "../lib/types";
 import { relativeTime } from "../lib/utils";
 import { cn } from "../lib/utils";
+import { costTotals, tierLabel } from "../lib/gemini/usage";
+import { formatUsd } from "../lib/gemini/pricing";
 
 export function Workspace({ exportSignal }: { exportSignal: number }) {
   const project = useProjectStore((state) => state.project);
@@ -116,7 +118,8 @@ export function Workspace({ exportSignal }: { exportSignal: number }) {
 function AiToolsPanel() {
   const models = useAiStore((state) => state.models);
   const keyPresent = useAiStore((state) => state.keyPresent);
-  const billingConfirmed = useAiStore((state) => state.billingConfirmed);
+  const keyValid = useAiStore((state) => state.keyValid);
+  const policy = useAiStore((state) => state.policy);
   const tier = useAiStore((state) => state.tier);
   const lastCheckedAt = useAiStore((state) => state.lastCheckedAt);
   const preferredModelId = useAiStore((state) => state.preferredModelId);
@@ -126,7 +129,9 @@ function AiToolsPanel() {
   const setTab = useProjectStore((state) => state.setTab);
   const tab = useProjectStore((state) => state.tab);
 
-  const freeModels = models.filter((model) => model.textCapable && model.freeTier === "free");
+  const freeModels = models.filter((model) => model.textCapable && model.freeAvailable);
+  const pricedModels = models.filter((model) => model.textCapable && model.paidAvailable);
+  const totals = costTotals(usage);
   const today = new Date().toISOString().slice(0, 10);
   const todayRequests = usage.filter((record) => record.at.slice(0, 10) === today).length;
   const lastRecord = usage[0];
@@ -147,19 +152,31 @@ function AiToolsPanel() {
         <div className="mt-3 space-y-2">
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-500">연결</span>
-            <Badge tone={keyPresent && billingConfirmed ? "green" : "amber"}>
-              {keyPresent ? (billingConfirmed ? "사용 가능" : "확인 필요") : "키 미등록"}
+            <Badge tone={keyPresent && keyValid ? "green" : "amber"}>
+              {keyPresent ? (keyValid ? "사용 가능" : "확인 필요") : "키 미등록"}
             </Badge>
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-500">티어</span>
-            <span className="font-medium text-slate-700">
-              {tier === "free" ? "Free (증거 확인)" : tier === "paid" ? "Paid (증거 확인)" : "확인 불가"}
-            </span>
+            <span className="font-medium text-slate-700">{tierLabel(tier)}</span>
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-500">무료 모델</span>
             <span className="font-medium text-slate-700">{freeModels.length}개</span>
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-500">유료 모델 (가격 확인)</span>
+            <span className="font-medium text-slate-700">{pricedModels.length}개</span>
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-500">모델 정책</span>
+            <span className="font-medium text-slate-700">
+              {policy.allowPaidModels ? "유료 허용" : "무료 전용"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-500">오늘 예상 비용</span>
+            <span className="font-medium text-slate-700">{formatUsd(totals.todayUsd)}</span>
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-500">오늘 요청</span>
@@ -175,7 +192,7 @@ function AiToolsPanel() {
               {relativeTime(lastRecord.at)}
             </div>
           ) : null}
-          {!keyPresent || !billingConfirmed ? (
+          {!keyPresent || !keyValid ? (
             <Button size="sm" variant="primary" className="w-full" onClick={() => setView("ai")}>
               AI 설정 열기
             </Button>

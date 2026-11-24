@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { ToastHost } from "./components/ui";
+import { CostApprovalDialog } from "./components/CostApprovalDialog";
 import { HomePage } from "./pages/HomePage";
 import { NewProjectPage } from "./pages/NewProjectPage";
 import { ProjectListPage } from "./pages/ProjectListPage";
@@ -78,6 +79,7 @@ export default function App() {
           {view === "workspace" ? <Workspace exportSignal={exportSignal} /> : null}
         </main>
       </div>
+      <CostApprovalDialog />
       <ToastHost />
     </div>
   );

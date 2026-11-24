@@ -10,7 +10,7 @@ export function PassageEditor() {
   const project = useProjectStore((state) => state.project);
   const update = useProjectStore((state) => state.update);
   const setTab = useProjectStore((state) => state.setTab);
-  const billingConfirmed = useAiStore((state) => state.billingConfirmed);
+  const keyValid = useAiStore((state) => state.keyValid);
   const keyPresent = useAiStore((state) => state.keyPresent);
   const [expanded, setExpanded] = useState(false);
 
@@ -130,9 +130,9 @@ export function PassageEditor() {
             <Card className="p-4">
               <div className="flex flex-wrap items-center gap-3">
                 <p className="flex-1 text-xs leading-relaxed text-slate-500">
-                  {keyPresent && billingConfirmed
+                  {keyPresent && keyValid
                     ? "준비되었습니다. ‘지문 분석’에서 주제·구조·문단별 정리를 생성하세요."
-                    : "AI 기능을 사용하려면 AI 설정에서 키 저장과 무료 사용 확인을 완료하세요."}
+                    : "AI 기능을 사용하려면 AI 설정에서 API 키를 저장하고 연결을 확인하세요."}
                 </p>
                 <Button size="sm" variant="primary" onClick={() => setTab("analysis")}>
                   지문 분석 열기

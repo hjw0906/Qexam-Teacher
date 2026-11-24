@@ -36,7 +36,7 @@ export function NewProjectPage() {
   const newProject = useProjectStore((state) => state.newProject);
   const setView = useProjectStore((state) => state.setView);
   const keyPresent = useAiStore((state) => state.keyPresent);
-  const billingConfirmed = useAiStore((state) => state.billingConfirmed);
+  const keyValid = useAiStore((state) => state.keyValid);
   const files = useIngestStore((state) => state.files);
   const markInserted = useIngestStore((state) => state.markInserted);
 
@@ -118,14 +118,14 @@ export function NewProjectPage() {
           }
         />
 
-        {!keyPresent || !billingConfirmed ? (
+        {!keyPresent || !keyValid ? (
           <Card className="mt-4 flex items-start gap-3 border-amber-200 bg-amber-50 p-4">
             <TriangleAlert className="mt-0.5 h-4 w-4 flex-none text-amber-600" />
             <div className="flex-1">
               <p className="text-sm font-semibold text-amber-900">AI 기능을 쓰려면 설정이 필요합니다</p>
               <p className="mt-0.5 text-xs leading-relaxed text-amber-700">
-                지문 입력과 편집은 지금도 가능합니다. AI 생성은 Gemini API 키 저장과 무료(비과금)
-                사용 확인 후에 활성화됩니다.
+                지문 입력과 편집은 지금도 가능합니다. AI 생성은 Gemini API 키 저장과 연결 확인 후에
+                활성화됩니다. 무료 모델만 사용할지, 유료 모델까지 허용할지는 AI 설정에서 정합니다.
               </p>
             </div>
             <Button size="sm" variant="secondary" onClick={() => setView("ai")}>

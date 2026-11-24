@@ -33,6 +33,13 @@ export const WORKSPACE_TABS: { id: WorkspaceTab; label: string }[] = [
 export type TaskKind = "analysis" | "easy" | "vocab" | "workbook" | "answer" | "verify";
 export type FreeStatus = "free" | "paid-only" | "unknown";
 
+/** USD per 1M tokens, from Google's published price list. */
+export interface ModelPricing {
+  inputPerMillion: number;
+  outputPerMillion: number;
+  note?: string;
+}
+
 export interface GeminiModel {
   /** e.g. "gemini-3.8-flash" */
   id: string;
@@ -48,9 +55,32 @@ export interface GeminiModel {
   freeSource: "catalog" | "server" | "none";
   textCapable: boolean;
   deprecated?: boolean;
+  /** null = price not in the snapshot, so paid use is not automatic. */
+  pricing: ModelPricing | null;
+  /** Free tier documented for this model. */
+  freeAvailable: boolean;
+  /** Paid tier price is known for this model. */
+  paidAvailable: boolean;
 }
 
-export type TierVerdict = "free" | "paid" | "unknown";
+export type TierVerdict = "free" | "tier1" | "tier2" | "tier3" | "paid" | "unknown";
+
+export type ModelMode = "auto" | "free-first" | "quality" | "cost" | "speed";
+
+export interface AiBudgets {
+  /** 0 = no limit. USD. */
+  dailyUsd: number;
+  monthlyUsd: number;
+  perRequestUsd: number;
+}
+
+export interface AiPolicy {
+  mode: ModelMode;
+  allowPaidModels: boolean;
+  budgets: AiBudgets;
+  /** Ask before the first paid request of a task run. */
+  confirmPaidRequests: boolean;
+}
 
 export interface DiagnosticsResult {
   keyValid: boolean;
@@ -62,6 +92,8 @@ export interface DiagnosticsResult {
   freeModels: number;
   paidOnlyModels: number;
   unknownModels: number;
+  /** Models with a known price that can be called when paid usage is allowed. */
+  pricedModels: number;
   message?: string;
 }
 
@@ -92,6 +124,10 @@ export interface UsageRecord {
   latencyMs?: number;
   limitHit?: boolean;
   switched?: boolean;
+  /** Estimated or actual USD cost of the request (0 for free models). */
+  costUsd?: number;
+  /** True when the request ran on a paid model. */
+  paid?: boolean;
 }
 
 export interface ModelUsageStat {
@@ -102,6 +138,7 @@ export interface ModelUsageStat {
   limitHits: number;
   promptTokens: number;
   outputTokens: number;
+  costUsd: number;
   lastUsedAt: string | null;
   lastError: string | null;
 }
@@ -115,6 +152,33 @@ export interface ServerLimitObservation {
   status: number;
   message: string;
   observedAt: string;
+}
+
+export interface CostEstimate {
+  promptTokens: number;
+  outputTokens: number;
+  pricingKnown: boolean;
+  costUsd: number | null;
+}
+
+export interface CostDecision {
+  allowed: boolean;
+  blockedReason: string | null;
+  estimate: CostEstimate;
+  remainingDailyUsd: number | null;
+  remainingMonthlyUsd: number | null;
+  needsConfirmation: boolean;
+}
+
+export interface CostApprovalRequest {
+  task: TaskKind;
+  modelId: string;
+  displayName: string;
+  costUsd: number;
+  promptTokens: number;
+  outputTokens: number;
+  remainingDailyUsd: number | null;
+  remainingMonthlyUsd: number | null;
 }
 
 export interface AttemptInfo {

@@ -1,6 +1,8 @@
 import type {
+  AiBudgets,
   ModelUsageStat,
   ServerLimitObservation,
+  TierVerdict,
   UsageRecord,
   UsageErrorKind,
 } from "../types";
@@ -26,6 +28,8 @@ export interface NewUsageRecord {
   latencyMs?: number;
   limitHit?: boolean;
   switched?: boolean;
+  costUsd?: number;
+  paid?: boolean;
 }
 
 export function loadUsage(): UsageRecord[] {
@@ -83,6 +87,7 @@ export function usageStats(records: UsageRecord[] = loadUsage()): {
         limitHits: 0,
         promptTokens: 0,
         outputTokens: 0,
+        costUsd: 0,
         lastUsedAt: null,
         lastError: null,
       });
@@ -92,6 +97,7 @@ export function usageStats(records: UsageRecord[] = loadUsage()): {
     if (record.limitHit) stat.limitHits += 1;
     stat.promptTokens += record.promptTokens ?? 0;
     stat.outputTokens += record.outputTokens ?? 0;
+    stat.costUsd += record.costUsd ?? 0;
     if (!stat.lastUsedAt || record.at > stat.lastUsedAt) stat.lastUsedAt = record.at;
     if (!record.ok && record.errorMessage) stat.lastError = record.errorMessage;
 
@@ -143,9 +149,25 @@ export function clearCooldowns(): void {
   saveJson(COOLDOWN_KEY, {});
 }
 
-/** Tier evidence comes only from Google's own quota errors. */
-export function tierEvidence(): { tier: "free" | "paid" | "unknown"; evidence: string } {
+/**
+ * Tier evidence comes only from Google's own quota errors. Billing status is a
+ * separate question: Google exposes no endpoint that reports it for an API key.
+ */
+export function tierEvidence(): { tier: TierVerdict; evidence: string } {
   const observations = loadLimitObservations();
+
+  for (const item of observations) {
+    const probe = `${item.quotaId ?? ""} ${item.quotaMetric ?? ""} ${item.message}`.toLowerCase();
+    const tierMatch = probe.match(/tier[_ -]?([123])/);
+    if (tierMatch) {
+      const tier = `tier${tierMatch[1]}` as TierVerdict;
+      return {
+        tier,
+        evidence: `Google API 429 응답의 할당량 지표에 ${tier.toUpperCase()} 표기가 확인되었습니다 (${item.quotaId ?? item.quotaMetric ?? "quota"}).`,
+      };
+    }
+  }
+
   const free = observations.find((item) =>
     `${item.quotaId ?? ""} ${item.quotaMetric ?? ""} ${item.message}`.toLowerCase().includes("free"),
   );
@@ -161,12 +183,81 @@ export function tierEvidence(): { tier: "free" | "paid" | "unknown"; evidence: s
   if (paid) {
     return {
       tier: "paid",
-      evidence: "Google API 응답에서 유료 결제 관련 할당량 지표가 확인되었습니다.",
+      evidence:
+        "Google API 응답에서 유료 결제 관련 할당량 지표가 확인되었습니다. Tier 1/2/3 세부 구분은 응답에 포함되지 않아 확인 불가입니다.",
     };
   }
   return {
     tier: "unknown",
     evidence:
-      "Google은 API 키의 결제/티어를 조회하는 공식 엔드포인트를 제공하지 않습니다. 요청을 보내지 않고는 확인할 수 없어 '확인 불가'로 표시합니다.",
+      "Google은 API 키의 결제/티어를 조회하는 공식 엔드포인트를 제공하지 않습니다. models.list는 모델 목록과 토큰 한도만 알려주므로, 서버 증거가 없으면 '확인 불가'로 표시합니다.",
+  };
+}
+
+/* ------------------------------ costs ------------------------------ */
+
+export interface CostTotals {
+  todayUsd: number;
+  monthUsd: number;
+  totalUsd: number;
+  today: string;
+  month: string;
+}
+
+export function localDayKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function costTotals(records: UsageRecord[] = loadUsage()): CostTotals {
+  const now = new Date();
+  const today = localDayKey(now);
+  const month = today.slice(0, 7);
+  let todayUsd = 0;
+  let monthUsd = 0;
+  let totalUsd = 0;
+  for (const record of records) {
+    const cost = record.costUsd ?? 0;
+    if (!cost) continue;
+    totalUsd += cost;
+    const dayKey = localDayKey(new Date(record.at));
+    if (dayKey === today) todayUsd += cost;
+    if (dayKey.slice(0, 7) === month) monthUsd += cost;
+  }
+  return {
+    todayUsd,
+    monthUsd,
+    totalUsd,
+    today,
+    month,
+  };
+}
+
+export function tierLabel(tier: TierVerdict): string {
+  switch (tier) {
+    case "free":
+      return "Free Tier (서버 증거)";
+    case "tier1":
+      return "Tier 1 (서버 증거)";
+    case "tier2":
+      return "Tier 2 (서버 증거)";
+    case "tier3":
+      return "Tier 3 (서버 증거)";
+    case "paid":
+      return "유료 티어 (세부 확인 불가)";
+    default:
+      return "확인 불가";
+  }
+}
+
+export function remainingBudget(budgets: AiBudgets, totals: CostTotals = costTotals()): {
+  dailyUsd: number | null;
+  monthlyUsd: number | null;
+} {
+  return {
+    dailyUsd: budgets.dailyUsd > 0 ? Math.max(0, budgets.dailyUsd - totals.todayUsd) : null,
+    monthlyUsd: budgets.monthlyUsd > 0 ? Math.max(0, budgets.monthlyUsd - totals.monthUsd) : null,
   };
 }

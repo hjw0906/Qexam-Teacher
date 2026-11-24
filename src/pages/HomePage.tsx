@@ -187,7 +187,7 @@ export function HomePage() {
             <SectionHeader title="작업 순서" description="처음 사용해도 이 순서대로 따라 하면 됩니다." />
             <ol className="mt-4 space-y-3">
               {[
-                { icon: Sparkles, title: "AI 설정", body: "Gemini API 키를 저장하고 무료 사용 확인을 체크합니다." },
+                { icon: Sparkles, title: "AI 설정", body: "Gemini API 키를 저장하고 모델 정책과 예산을 정합니다." },
                 { icon: FilePlus2, title: "지문 준비", body: "텍스트 입력 또는 PDF·이미지 첨부 후 OCR 결과를 수정합니다." },
                 { icon: GraduationCap, title: "자료 생성", body: "분석 → 쉬운 설명 → 단어 시험 → 워크북 → 답안지 → 검증." },
                 { icon: Timer, title: "편집·출력", body: "문서 편집기에서 다듬고 PDF/PNG로 내보내거나 인쇄합니다." },
@@ -209,10 +209,10 @@ export function HomePage() {
               })}
             </ol>
             <div className="mt-4 rounded-lg bg-slate-50 p-3">
-              <Badge tone="blue">무료 우선</Badge>
+              <Badge tone="blue">무료 우선 · 기본값</Badge>
               <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                무료 사용이 확인된 Gemini 모델만 자동 호출합니다. 유료 전용 모델은 차단되고,
-                무료 여부가 불확실한 모델은 자동 라우팅에서 제외됩니다.
+                기본 설정은 무료 티어 모델만 자동 호출합니다. AI 설정에서 유료 모델 사용을 허용하면
+                가격이 확인된 유료 모델도 후보가 되며, 예산과 요청당 한도를 넘는 호출은 차단됩니다.
               </p>
             </div>
           </Card>

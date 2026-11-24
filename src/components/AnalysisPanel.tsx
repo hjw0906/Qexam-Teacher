@@ -145,7 +145,7 @@ export function AnalysisPanel() {
               <EmptyState
                 icon={<ListChecks className="h-8 w-8" />}
                 title="아직 분석 결과가 없습니다"
-                description="‘지문 분석 실행’을 누르면 무료 사용이 확인된 Gemini 모델이 자동 선택됩니다."
+                description="‘지문 분석 실행’을 누르면 설정한 정책과 예산에 맞는 Gemini 모델이 자동 선택됩니다."
               />
             </div>
           ) : draft ? (

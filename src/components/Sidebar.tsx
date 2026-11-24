@@ -26,9 +26,7 @@ export function Sidebar() {
   const hasProject = useProjectStore((state) => Boolean(state.project));
   const keyPresent = useAiStore((state) => state.keyPresent);
   const keyValid = useAiStore((state) => state.keyValid);
-  const billingConfirmed = useAiStore((state) => state.billingConfirmed);
-
-  const aiReady = keyPresent && keyValid && billingConfirmed;
+  const aiReady = keyPresent && keyValid;
 
   return (
     <aside className="flex w-[228px] flex-none flex-col border-r border-slate-200 bg-white">
@@ -101,8 +99,8 @@ export function Sidebar() {
           </div>
           <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
             {aiReady
-              ? "무료 사용 확인 완료 · 자동 모델 전환 사용"
-              : "AI 기능을 쓰려면 API 키와 무료 사용 확인이 필요합니다."}
+              ? "연결 확인 완료 · 정책에 따라 모델 자동 선택"
+              : "AI 기능을 쓰려면 AI 설정에서 API 키를 저장하고 연결을 확인하세요."}
           </p>
         </button>
         <p className="mt-3 px-1 text-[10px] text-slate-400">v1.0.0 · 로컬 저장 · 오프라인 편집</p>

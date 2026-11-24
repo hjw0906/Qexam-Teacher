@@ -27,6 +27,7 @@ import { rankModels } from "./router";
 import { recordUsage, setCooldown } from "./usage";
 import { nowIso, truncate, uid } from "../utils";
 import { chunkBudgetFor, contextTail, estimateTokens, planChunks, splitTextSmart } from "../ingest/chunker";
+import { estimateCostUsd } from "./pricing";
 import { loadAiCheckpoint, pruneAiCheckpoints, saveAiCheckpoint } from "../ingest/checkpoint";
 
 export class AiTaskError extends Error {
@@ -79,13 +80,6 @@ async function ensureUsable(): Promise<{ key: string; models: ReturnType<typeof 
       "왼쪽 메뉴의 'AI 설정'에서 API 키를 저장하면 AI 기능을 사용할 수 있습니다.",
     );
   }
-  if (!state.billingConfirmed) {
-    throw new AiTaskError(
-      "no-consent",
-      "무료(비과금) 사용 확인이 필요합니다.",
-      "AI 설정에서 '이 프로젝트에는 결제(빌링)가 연결되어 있지 않음'을 확인해 주세요. 확인 전에는 유료 결제가 발생할 수 있는 요청을 보내지 않습니다.",
-    );
-  }
   const { readSecret } = await import("../tauri");
   const key = (await readSecret())?.trim();
   if (!key) {
@@ -119,21 +113,37 @@ export async function runJsonTask<T>(args: {
 }): Promise<RunResult<T>> {
   const { key, models } = await ensureUsable();
   const state = useAiStore.getState();
+  const policy = state.policy;
+  const promptTokens = estimateTokens(`${args.system}\n${args.prompt}`);
+  const estimatedOutput = Math.max(256, Math.min(args.maxOutputTokens ?? 4096, 4096));
   const ranked = rankModels(models, args.task, {
     blockedModelIds: state.blockedModelIds,
     preferredModelId: state.preferredModelId,
+    allowPaidModels: policy.allowPaidModels,
+    mode: policy.mode,
+    tier: state.tier,
+    estimatedPromptTokens: promptTokens,
+    estimatedOutputTokens: estimatedOutput,
+    perRequestUsd: policy.budgets.perRequestUsd,
   });
 
   if (!ranked.length) {
     throw new AiTaskError(
       "no-model",
-      "무료 사용이 확인된 Gemini 모델이 없습니다.",
-      "유료 전용 모델이나 무료 여부를 확인할 수 없는 모델은 자동으로 호출하지 않습니다. AI 설정에서 모델 목록을 새로고침하거나 차단 설정을 확인해 주세요.",
+      policy.allowPaidModels
+        ? "지금 설정에서 자동 호출할 수 있는 Gemini 모델이 없습니다."
+        : "무료로 사용할 수 있는 Gemini 모델이 없습니다.",
+      policy.allowPaidModels
+        ? "모델 목록·차단 설정·예산을 확인해 주세요. 가격이 확인되지 않은 모델은 자동 호출하지 않습니다."
+        : "AI 설정에서 ‘유료 모델 사용 허용’을 켜면 해당 티어에서 접근 가능한 유료 모델도 자동 선택에 포함됩니다. 무료 여부가 확인되지 않은 모델은 호출하지 않습니다.",
     );
   }
 
   const attempts: AttemptInfo[] = [];
   let switched = false;
+  let paidApproved = false;
+  let paidDeclined = false;
+  let budgetBlocked = 0;
   let lastError: AiTaskError | null = null;
 
   for (const model of ranked.slice(0, 4)) {
@@ -150,6 +160,42 @@ export async function runJsonTask<T>(args: {
       continue;
     }
 
+    if (paidDeclined && model.paid) continue;
+
+    const decision = useAiStore.getState().evaluateCost(model, promptTokens, estimatedOutput);
+    if (!decision.allowed) {
+      budgetBlocked += 1;
+      attempts.push({
+        modelId: model.id,
+        ok: false,
+        message: decision.blockedReason ?? "비용/예산 확인 불가",
+      });
+      continue;
+    }
+
+    if (model.paid && decision.needsConfirmation && !paidApproved) {
+      const approved = await useAiStore.getState().requestCostApproval({
+        task: args.task,
+        modelId: model.id,
+        displayName: model.displayName || model.id,
+        costUsd: decision.estimate.costUsd ?? 0,
+        promptTokens: decision.estimate.promptTokens,
+        outputTokens: decision.estimate.outputTokens,
+        remainingDailyUsd: decision.remainingDailyUsd,
+        remainingMonthlyUsd: decision.remainingMonthlyUsd,
+      });
+      if (!approved) {
+        paidDeclined = true;
+        attempts.push({
+          modelId: model.id,
+          ok: false,
+          message: "사용자가 유료 요청을 승인하지 않아 무료 모델만 사용합니다.",
+        });
+        continue;
+      }
+      paidApproved = true;
+    }
+
     for (let attempt = 0; attempt < 2; attempt += 1) {
       args.options?.onProgress?.(`${model.displayName || model.id} 호출 중…`);
       const started = Date.now();
@@ -163,6 +209,14 @@ export async function runJsonTask<T>(args: {
           maxOutputTokens: args.maxOutputTokens,
           signal: args.options?.signal,
         });
+        const actualCost =
+          model.pricing !== null
+            ? estimateCostUsd(
+                model.pricing,
+                response.promptTokens ?? promptTokens,
+                response.outputTokens ?? estimatedOutput,
+              ) ?? 0
+            : 0;
         let parsed: T;
         try {
           parsed = parseJsonResponse<T>(response.text);
@@ -179,6 +233,8 @@ export async function runJsonTask<T>(args: {
             totalTokens: response.totalTokens,
             latencyMs: Date.now() - started,
             switched,
+            costUsd: actualCost,
+            paid: model.paid,
           });
           attempts.push({
             modelId: model.id,
@@ -203,6 +259,8 @@ export async function runJsonTask<T>(args: {
           totalTokens: response.totalTokens,
           latencyMs: response.latencyMs,
           switched,
+          costUsd: actualCost,
+          paid: model.paid,
         });
         useAiStore.getState().refreshUsage();
         attempts.push({ modelId: model.id, ok: true });
@@ -297,8 +355,10 @@ export async function runJsonTask<T>(args: {
     lastError ??
     new AiTaskError(
       "all-failed",
-      "모든 무료 모델 호출에 실패했습니다.",
-      "잠시 후 다시 시도해 주세요. 무료 한도 초과인 경우 작업 내용은 저장되어 있습니다.",
+      "사용 가능한 Gemini 모델 호출에 실패했습니다.",
+      budgetBlocked
+        ? `예산·가격 조건으로 ${budgetBlocked}개 모델이 차단되었습니다. AI 설정의 예산/모델 정책을 확인해 주세요. 완료된 작업 내용은 저장되어 있습니다.`
+        : "잠시 후 다시 시도해 주세요. 한도 초과인 경우 작업 내용은 저장되어 있습니다.",
       attempts,
     )
   );

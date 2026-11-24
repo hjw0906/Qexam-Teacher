@@ -99,8 +99,8 @@ export function VerificationPanel() {
             <Card className="mt-4 border-brand-200 bg-brand-50/60 p-4">
               <p className="text-sm font-bold text-brand-900">검증을 실행할까요?</p>
               <p className="mt-1 text-xs leading-relaxed text-brand-800">
-                검증 요청도 Gemini 무료 사용량을 소비합니다. 현재 사용량 대시보드에서 잔여 한도를 확인한
-                뒤 실행하세요. 한도에 도달하면 다른 무료 모델로 자동 전환되거나 작업이 대기됩니다.
+                검증 요청도 Gemini 사용량을 소비합니다. 무료 모델은 무료 한도를, 유료 모델 허용 시에는
+                설정한 예산을 사용합니다. 한도에 도달하면 다른 모델로 자동 전환되거나 예산 초과로 차단됩니다.
               </p>
               <div className="mt-3 flex gap-2">
                 <Button size="sm" variant="primary" onClick={() => void generate()}>

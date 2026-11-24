@@ -1,25 +1,26 @@
 import { useMemo, useState } from "react";
-import { Ban, CheckCircle2, CircleSlash, HelpCircle, Star } from "lucide-react";
+import { Ban, CheckCircle2, CircleSlash, HelpCircle, Star, Wallet } from "lucide-react";
 import { Badge, Button, SegmentedControl, Select } from "./ui";
 import type { GeminiModel } from "../lib/types";
 import { useAiStore } from "../store/aiStore";
 import { latestLimitFor, usageStats } from "../lib/gemini/usage";
+import { describePricing, estimateCostUsd, formatUsd, isPaidModel } from "../lib/gemini/pricing";
 import { formatDateTime } from "../lib/utils";
 
 type Filter = "all" | "free" | "paid" | "unknown" | "text";
 
 export function FreeBadge({ model }: { model: GeminiModel }) {
-  if (model.freeTier === "free") {
+  if (model.freeAvailable) {
     return (
       <Badge tone="green">
-        <CheckCircle2 className="h-3 w-3" /> 무료 사용 가능
+        <CheckCircle2 className="h-3 w-3" /> 무료 티어 지원
       </Badge>
     );
   }
-  if (model.freeTier === "paid-only") {
+  if (isPaidModel(model)) {
     return (
       <Badge tone="red">
-        <Ban className="h-3 w-3" /> 유료 전용 · 차단
+        <Ban className="h-3 w-3" /> 유료 전용
       </Badge>
     );
   }
@@ -38,6 +39,7 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
   const toggleBlocked = useAiStore((state) => state.toggleBlockedModel);
   const setPreferred = useAiStore((state) => state.setPreferredModel);
   const usage = useAiStore((state) => state.usage);
+  const allowPaid = useAiStore((state) => state.policy.allowPaidModels);
 
   const stats = useMemo(() => usageStats(usage), [usage]);
 
@@ -45,9 +47,9 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
     const keyword = query.trim().toLowerCase();
     return models
       .filter((model) => {
-        if (filter === "free") return model.freeTier === "free";
-        if (filter === "paid") return model.freeTier === "paid-only";
-        if (filter === "unknown") return model.freeTier === "unknown";
+        if (filter === "free") return model.freeAvailable;
+        if (filter === "paid") return model.paidAvailable && !model.freeAvailable;
+        if (filter === "unknown") return !model.pricing;
         if (filter === "text") return model.textCapable;
         return true;
       })
@@ -58,8 +60,7 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
           model.displayName.toLowerCase().includes(keyword),
       )
       .sort((a, b) => {
-        const rank = (model: GeminiModel) =>
-          model.freeTier === "free" ? 0 : model.freeTier === "unknown" ? 1 : 2;
+        const rank = (model: GeminiModel) => (model.freeAvailable ? 0 : model.paidAvailable ? 1 : 2);
         if (rank(a) !== rank(b)) return rank(a) - rank(b);
         return b.id.localeCompare(a.id);
       });
@@ -81,9 +82,9 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
           onChange={setFilter}
           options={[
             { value: "all", label: `전체 ${models.length}` },
-            { value: "free", label: `무료 ${models.filter((m) => m.freeTier === "free").length}` },
-            { value: "paid", label: `유료 전용 ${models.filter((m) => m.freeTier === "paid-only").length}` },
-            { value: "unknown", label: `확인 불가 ${models.filter((m) => m.freeTier === "unknown").length}` },
+            { value: "free", label: `무료 ${models.filter((m) => m.freeAvailable).length}` },
+            { value: "paid", label: `유료 ${models.filter((m) => m.paidAvailable && !m.freeAvailable).length}` },
+            { value: "unknown", label: `가격 미확인 ${models.filter((m) => !m.pricing).length}` },
             { value: "text", label: "텍스트" },
           ]}
         />
@@ -96,14 +97,15 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
       </div>
 
       <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
-        <table className="w-full min-w-[900px] border-collapse text-left">
+        <table className="w-full min-w-[1080px] border-collapse text-left">
           <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-3 py-2 font-semibold">모델</th>
-              <th className="px-3 py-2 font-semibold">무료 여부</th>
-              <th className="px-3 py-2 font-semibold">입력/출력 한도</th>
+              <th className="px-3 py-2 font-semibold">티어 지원</th>
+              <th className="px-3 py-2 font-semibold">가격 (입력/출력)</th>
+              <th className="px-3 py-2 font-semibold">예상 요청 비용</th>
+              <th className="px-3 py-2 font-semibold">토큰 한도</th>
               <th className="px-3 py-2 font-semibold">자체 기록</th>
-              <th className="px-3 py-2 font-semibold">서버 확인 한도</th>
               <th className="px-3 py-2 font-semibold">라우팅</th>
             </tr>
           </thead>
@@ -113,6 +115,8 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
               const limit = latestLimitFor(model.id);
               const isBlocked = blocked.includes(model.id);
               const isPreferred = preferred === model.id;
+              const estimate = estimateCostUsd(model.pricing, 4_000, 2_000);
+              const callable = allowPaid ? model.paidAvailable : model.freeAvailable;
               return (
                 <tr key={model.id} className="align-top hover:bg-slate-50/60">
                   <td className="px-3 py-2.5">
@@ -135,19 +139,46 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
                     ) : null}
                   </td>
                   <td className="px-3 py-2.5">
-                    <FreeBadge model={model} />
+                    <div className="flex flex-col items-start gap-1">
+                      <FreeBadge model={model} />
+                      <Badge tone={model.paidAvailable ? "blue" : "slate"}>
+                        <Wallet className="h-3 w-3" /> {model.paidAvailable ? "유료 가격 확인" : "유료 가격 미확인"}
+                      </Badge>
+                    </div>
                     <p className="mt-1 text-[10px] text-slate-400">
-                      {model.freeTier === "unknown"
-                        ? "Google 가격표에서 확인되지 않음"
-                        : "가격표 스냅샷 기준"}
+                      {model.freeAvailable
+                        ? "무료 모드에서 호출 가능"
+                        : model.pricing
+                          ? "유료 모델 허용 시 호출 가능"
+                          : "자동 호출 제외 (가격 미확인)"}
                     </p>
+                  </td>
+                  <td className="px-3 py-2.5 text-[11px] tabular-nums text-slate-600">
+                    <div className={model.pricing ? "text-slate-700" : "text-amber-600"}>
+                      {describePricing(model)}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-slate-400">
+                      {model.pricing?.note ?? "가격표 스냅샷 기준 (USD / 1M tokens)"}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 text-[11px] tabular-nums text-slate-700">
+                    {estimate === null ? (
+                      <span className="text-amber-600">비용 확인 불가</span>
+                    ) : (
+                      <>
+                        <span className="font-semibold">{formatUsd(estimate)}</span>
+                        <div className="text-[10px] text-slate-400">입력 4k · 출력 2k 기준</div>
+                      </>
+                    )}
+                    <div className={`mt-1 text-[10px] ${callable ? "text-emerald-600" : "text-slate-400"}`}>
+                      {callable ? "현재 정책에서 후보" : "현재 정책에서 제외"}
+                    </div>
                   </td>
                   <td className="px-3 py-2.5 text-[11px] tabular-nums text-slate-600">
                     <div>입력 {(model.inputTokenLimit ?? 0).toLocaleString()}</div>
                     <div>출력 {(model.outputTokenLimit ?? 0).toLocaleString()}</div>
                     <div className="mt-1 text-[10px] text-slate-400">
-                      {model.methods.length}개 메서드 ·{" "}
-                      {model.textCapable ? "텍스트 생성" : "텍스트 외"}
+                      {model.methods.length}개 메서드 · {model.textCapable ? "텍스트 생성" : "텍스트 외"}
                     </div>
                   </td>
                   <td className="px-3 py-2.5 text-[11px] tabular-nums text-slate-600">
@@ -159,9 +190,13 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
                         <div>
                           실패 {stat.failure} · 한도 {stat.limitHits}
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          마지막 {formatDateTime(stat.lastUsedAt)}
-                        </div>
+                        <div className="text-[10px] text-slate-500">비용 {formatUsd(stat.costUsd)}</div>
+                        <div className="text-[10px] text-slate-400">마지막 {formatDateTime(stat.lastUsedAt)}</div>
+                        {limit ? (
+                          <div className="mt-1 text-[10px] text-amber-600">
+                            서버 한도 응답 {limit.quotaId ?? limit.quotaMetric ?? `HTTP ${limit.status}`}
+                          </div>
+                        ) : null}
                         {stat.lastError ? (
                           <div className="mt-1 line-clamp-2 max-w-[220px] text-[10px] text-red-500">
                             {stat.lastError}
@@ -170,26 +205,6 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
                       </>
                     ) : (
                       <span className="text-slate-400">기록 없음</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 text-[11px] text-slate-600">
-                    {limit ? (
-                      <>
-                        <div className="font-medium text-slate-700">
-                          {limit.quotaId ?? limit.quotaMetric ?? "할당량 오류"}
-                        </div>
-                        <div className="text-[10px] text-slate-500">HTTP {limit.status}</div>
-                        {limit.retryAfterMs ? (
-                          <div className="text-[10px] text-slate-500">
-                            재시도 대기 {Math.ceil(limit.retryAfterMs / 1000)}초
-                          </div>
-                        ) : null}
-                        <div className="text-[10px] text-slate-400">
-                          {formatDateTime(limit.observedAt)}
-                        </div>
-                      </>
-                    ) : (
-                      <span className="text-slate-400">Google 응답에 한도 정보 없음</span>
                     )}
                   </td>
                   <td className="px-3 py-2.5">
@@ -224,8 +239,9 @@ export function ModelTable({ models }: { models: GeminiModel[] }) {
         </div>
       ) : null}
       <p className="mt-2 text-[10px] leading-relaxed text-slate-400">
-        ‘서버 확인 한도’는 Google이 429 응답으로 알려준 할당량 정보만 표시합니다. Google은 모델별
-        RPM/RPD/TPM 잔여량을 조회하는 공식 API를 제공하지 않으므로 잔여량은 표시하지 않습니다.
+        ‘서버 한도 응답’은 Google이 429 응답으로 알려준 할당량 정보만 표시합니다. Google은 모델별
+        RPM/RPD/TPM 잔여량과 실제 청구 금액을 조회하는 공식 API를 제공하지 않으므로 잔여량은 표시하지
+        않습니다. 예상 요청 비용은 가격표 스냅샷과 토큰 추정치로 계산한 값입니다.
       </p>
     </div>
   );
@@ -240,6 +256,7 @@ export function ModelQuickSelect({
   onChange: (value: string | null) => void;
   models: GeminiModel[];
 }) {
+  const options = models.filter((model) => model.textCapable && (model.freeAvailable || model.paidAvailable));
   return (
     <Select
       value={value ?? ""}
@@ -247,13 +264,11 @@ export function ModelQuickSelect({
       className="h-8 py-1 text-xs"
     >
       <option value="">자동 선택 (권장)</option>
-      {models
-        .filter((model) => model.freeTier === "free" && model.textCapable)
-        .map((model) => (
-          <option key={model.id} value={model.id}>
-            {model.displayName} ({model.id})
-          </option>
-        ))}
+      {options.map((model) => (
+        <option key={model.id} value={model.id}>
+          {model.displayName} ({model.id}) · {describePricing(model)}
+        </option>
+      ))}
     </Select>
   );
 }

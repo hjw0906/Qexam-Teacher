@@ -1,5 +1,6 @@
 import type { GeminiModel, UsageErrorKind } from "../types";
 import { isTextModel, lookupCatalog } from "./catalog";
+import { lookupPricing } from "./pricing";
 import { sleep, stripCodeFence } from "../utils";
 
 export const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -163,6 +164,7 @@ export function toGeminiModel(raw: RawModel): GeminiModel {
   const id = (raw.baseModelId ?? fullName.replace(/^models\//, "")) || fullName;
   const methods = raw.supportedGenerationMethods ?? [];
   const lookup = lookupCatalog(id);
+  const pricing = lookupPricing(id);
   return {
     id,
     name: fullName,
@@ -176,6 +178,9 @@ export function toGeminiModel(raw: RawModel): GeminiModel {
     freeSource: lookup.freeTier === "unknown" ? "none" : "catalog",
     textCapable: isTextModel(id, methods),
     deprecated: /deprecated|retired/i.test(`${raw.description ?? ""} ${raw.displayName ?? ""}`),
+    pricing,
+    freeAvailable: lookup.freeTier === "free",
+    paidAvailable: pricing !== null,
   };
 }
 

@@ -10,6 +10,7 @@ import {
 } from "../src/lib/document";
 import { lookupCatalog } from "../src/lib/gemini/catalog";
 import { rankModels } from "../src/lib/gemini/router";
+import { lookupPricing } from "../src/lib/gemini/pricing";
 import { usageStats } from "../src/lib/gemini/usage";
 import { normalizeProject, createProject } from "../src/store/projectStore";
 import { composeDocument } from "../src/lib/compose";
@@ -27,6 +28,9 @@ const model = (id: string, free: GeminiModel["freeTier"], outputTokenLimit = 819
   textCapable: true,
   inputTokenLimit: 1_000_000,
   outputTokenLimit,
+  pricing: lookupPricing(id),
+  freeAvailable: free === "free",
+  paidAvailable: lookupPricing(id) !== null,
 });
 
 describe("free tier catalog", () => {
