@@ -14,7 +14,8 @@ import {
 import { AiGate } from "./AiGate";
 import { useAiAction } from "./useAiAction";
 import { useProjectStore } from "../store/projectStore";
-import { analyzePassage } from "../lib/gemini/tasks";
+import { useAiStore } from "../store/aiStore";
+import { analysisPlan, analyzePassage } from "../lib/gemini/tasks";
 import { toast } from "../store/uiStore";
 import { composeDocument } from "../lib/compose";
 import { formatDateTime, nowIso } from "../lib/utils";
@@ -26,6 +27,9 @@ export function AnalysisPanel() {
   const applyPages = useProjectStore((state) => state.applyPages);
   const setTab = useProjectStore((state) => state.setTab);
   const { busy, progress, run, cancel } = useAiAction();
+  const models = useAiStore((state) => state.models);
+  const passageText = project?.passage.text ?? "";
+  const plan = useMemo(() => analysisPlan(passageText, models), [passageText, models]);
 
   const analysis = project?.analysis ?? null;
   const [draft, setDraft] = useState<PassageAnalysis | null>(analysis);
@@ -111,6 +115,15 @@ export function AnalysisPanel() {
             }
           />
 
+          {plan.needsChunking ? (
+            <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] leading-relaxed text-blue-700">
+              긴 지문입니다 (약 {plan.estimatedTokens.toLocaleString()} 토큰). 문단·문장 경계에서{" "}
+              <b>{plan.chunkCount}개 구간</b>으로 나누어 순차 분석한 뒤 하나의 결과로 합칩니다. 구간별 결과는
+              이 PC에 저장되어 실패하거나 한도를 초과해도 완료된 구간을 다시 요청하지 않습니다.
+              {plan.modelInputLimit ? ` (모델 입력 한도 ${plan.modelInputLimit.toLocaleString()} 토큰)` : ""}
+            </div>
+          ) : null}
+
           {busy ? (
             <div className="mt-4">
               <p className="text-xs font-medium text-brand-700">{progress || "AI가 지문을 읽고 있습니다…"}</p>
@@ -139,6 +152,9 @@ export function AnalysisPanel() {
             <div className="mt-5 space-y-4">
               <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
                 <Badge tone="blue">모델 {analysis.modelId}</Badge>
+                {analysis.chunkCount && analysis.chunkCount > 1 ? (
+                  <Badge tone="slate">{analysis.chunkCount}구간 통합</Badge>
+                ) : null}
                 <span>생성 {formatDateTime(analysis.createdAt)}</span>
                 {analysis.editedAt ? <span>· 수정 {formatDateTime(analysis.editedAt)}</span> : null}
                 {dirty ? <Badge tone="amber">저장되지 않은 수정</Badge> : null}

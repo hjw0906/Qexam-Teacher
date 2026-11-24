@@ -13,6 +13,7 @@ import type {
   TaskKind,
   AttemptInfo,
   UsageErrorKind,
+  GeminiModel,
 } from "../types";
 import { PROBLEM_KIND_LABELS } from "../types";
 import { useAiStore } from "../../store/aiStore";
@@ -25,6 +26,8 @@ import {
 import { rankModels } from "./router";
 import { recordUsage, setCooldown } from "./usage";
 import { nowIso, truncate, uid } from "../utils";
+import { chunkBudgetFor, contextTail, estimateTokens, planChunks, splitTextSmart } from "../ingest/chunker";
+import { loadAiCheckpoint, pruneAiCheckpoints, saveAiCheckpoint } from "../ingest/checkpoint";
 
 export class AiTaskError extends Error {
   code: "no-key" | "no-consent" | "no-model" | "all-failed" | "invalid" | "aborted";
@@ -308,6 +311,49 @@ export async function runJsonTask<T>(args: {
 const str = { type: "string" } as const;
 const strArray = { type: "array", items: { type: "string" } } as const;
 
+const partialAnalysisSchema: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    topic: str,
+    gist: str,
+    thesis: str,
+    keyEvidence: strArray,
+    keySentences: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { text: str, note: str },
+        required: ["text", "note"],
+      },
+    },
+    paragraphs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { index: { type: "integer" }, content: str, role: str },
+        required: ["index", "content", "role"],
+      },
+    },
+    structureLabel: str,
+    structureSteps: strArray,
+  },
+  required: ["topic", "gist", "thesis", "keyEvidence", "keySentences", "paragraphs", "structureLabel", "structureSteps"],
+};
+
+const synthesisSchema: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    topic: str,
+    gist: str,
+    title: str,
+    oneLineSummary: str,
+    thesis: str,
+    structureLabel: str,
+    structureSteps: strArray,
+  },
+  required: ["topic", "gist", "title", "oneLineSummary", "thesis", "structureLabel", "structureSteps"],
+};
+
 const analysisSchema: Record<string, unknown> = {
   type: "object",
   properties: {
@@ -536,12 +582,16 @@ export async function analyzePassage(
   title: string,
   options: RunOptions = {},
 ): Promise<{ analysis: PassageAnalysis; modelId: string; attempts: AttemptInfo[] }> {
-  const prepared = preparePassage(passageText);
-  if (!prepared.text) throw new AiTaskError("invalid", "지문이 비어 있습니다.");
+  const cleaned = passageText.replace(/\r\n/g, "\n").trim();
+  if (!cleaned) throw new AiTaskError("invalid", "지문이 비어 있습니다.");
+  const plan = analysisPlan(cleaned, useAiStore.getState().models);
+  if (plan.needsChunking) {
+    return analyzeLongPassage(cleaned, title, plan, options);
+  }
   const prompt = `다음 지문을 분석해 주세요.
-${title ? `지문 제목(참고): ${title}\n` : ""}${prepared.truncated ? "지문이 길어 앞부분 일부만 사용했습니다.\n" : ""}
+${title ? `지문 제목(참고): ${title}\n` : ""}
 [지문]
-${prepared.text}
+${cleaned}
 
 작성 지침:
 - topic: 글의 주제 (한 문장)
@@ -586,8 +636,199 @@ ${prepared.text}
     structureSteps: asStringArray(raw.structureSteps),
     modelId: result.modelId,
     createdAt: nowIso(),
+    chunkCount: 1,
   };
   return { analysis, modelId: result.modelId, attempts: result.attempts };
+}
+
+export interface AnalysisPlan {
+  chunkCount: number;
+  maxChars: number;
+  estimatedTokens: number;
+  modelInputLimit: number | null;
+  needsChunking: boolean;
+}
+
+/** How a passage would be split, using the best free model's input limit. */
+export function analysisPlan(passageText: string, models: GeminiModel[] = []): AnalysisPlan {
+  const ranked = models.length ? rankModels(models, "analysis") : [];
+  const inputLimit = ranked[0]?.inputTokenLimit ?? null;
+  const maxChars = chunkBudgetFor(inputLimit);
+  const normalized = passageText.replace(/\r\n/g, "\n").trim();
+  const chunks = planChunks(normalized, { maxChars }).chunks;
+  return {
+    chunkCount: Math.max(1, chunks.length),
+    maxChars,
+    estimatedTokens: estimateTokens(normalized),
+    modelInputLimit: inputLimit,
+    needsChunking: chunks.length > 1,
+  };
+}
+
+function hashText(text: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${(hash >>> 0).toString(36)}${text.length.toString(36)}`;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const key = value.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(key);
+  }
+  return result;
+}
+
+/**
+ * Map-reduce analysis for documents that exceed one request. Each chunk is
+ * analysed on its own (with the tail of the previous chunk as context), the
+ * partial result is cached, and a final small request merges the parts.
+ * Re-running after a failure or a quota hit reuses every cached chunk.
+ */
+async function analyzeLongPassage(
+  cleaned: string,
+  title: string,
+  plan: AnalysisPlan,
+  options: RunOptions,
+): Promise<{ analysis: PassageAnalysis; modelId: string; attempts: AttemptInfo[] }> {
+  const chunks = splitTextSmart(cleaned, plan.maxChars);
+  const total = chunks.length;
+  const documentKey = hashText(cleaned);
+  const partials: Record<string, unknown>[] = [];
+  const attempts: AttemptInfo[] = [];
+  let reused = 0;
+
+  for (let index = 0; index < total; index += 1) {
+    if (options.signal?.aborted) {
+      throw new AiTaskError("aborted", "사용자가 요청을 취소했습니다.", "", attempts);
+    }
+    const chunk = chunks[index];
+    if (!chunk) continue;
+    const cacheKey = `analysis:${documentKey}:${plan.maxChars}:${index}`;
+    options.onProgress?.(`긴 지문 ${index + 1}/${total} 구간 분석 중…`);
+
+    const cached = await loadAiCheckpoint<Record<string, unknown>>(cacheKey);
+    if (cached) {
+      partials.push(cached);
+      reused += 1;
+      continue;
+    }
+
+    const previous = index > 0 ? contextTail(chunks[index - 1]?.text ?? "", 600) : "";
+    const prompt = `긴 지문을 ${total}개 구간으로 나누어 분석하고 있습니다. 아래는 ${index + 1}번째 구간입니다.
+${
+  previous
+    ? `\n[앞 구간의 마지막 문맥 — 흐름 파악용이며 분석 대상이 아닙니다]\n${previous}\n`
+    : ""
+}
+[지문 구간 ${index + 1}/${total}]
+${chunk.text}
+
+작성 지침(부분 분석):
+- topic/gist/thesis: 이 구간의 내용을 기준으로 작성합니다.
+- keyEvidence: 이 구간의 핵심 근거 1~3개
+- keySentences: 이 구간의 주요 문장 1~3개와 각 문장의 역할
+- paragraphs: 이 구간에 포함된 문단을 순서대로. index는 이 구간 안에서 1부터 시작합니다.
+- structureLabel/structureSteps: 이 구간에서 보이는 논리 구조 (애매하면 빈 문자열)
+- 모든 내용은 한국어로 작성합니다.`;
+
+    const result = await runJsonTask<Record<string, unknown>>({
+      task: "analysis",
+      system: TEACHER_SYSTEM,
+      prompt,
+      schema: partialAnalysisSchema,
+      options,
+    });
+    partials.push(result.data);
+    attempts.push(...result.attempts);
+    await saveAiCheckpoint(cacheKey, result.data);
+  }
+
+  if (reused) {
+    options.onProgress?.(`저장된 구간 결과 ${reused}개를 재사용했습니다.`);
+  }
+
+  options.onProgress?.(`${total}개 구간을 하나의 분석으로 통합하는 중…`);
+  const outline = partials.map((partial, index) => ({
+    구간: index + 1,
+    주제: asString(partial.topic),
+    요지: asString(partial.gist),
+    주장: asString(partial.thesis),
+    구조: asString(partial.structureLabel),
+    문단역할: asRecordArray(partial.paragraphs).map((item) => asString(item.role)),
+  }));
+  const synthesisPrompt = `아래는 하나의 긴 지문을 ${total}개 구간으로 나누어 분석한 결과입니다. 이 부분 결과를 종합해 글 전체에 대한 최종 분석을 작성해 주세요.
+- topic: 글 전체의 주제
+- gist: 글 전체의 요지 (2~3문장)
+- title: 글 전체에 어울리는 제목${title ? ` (원문 제목 후보: ${title})` : ""}
+- oneLineSummary: 한 줄 요약
+- thesis: 필자의 핵심 주장
+- structureLabel/structureSteps: 글 전체의 논리 구조
+- 부분 결과에 없는 내용을 새로 만들지 말고, 구간별 흐름을 종합합니다.
+
+[구간별 부분 분석]
+${JSON.stringify(outline, null, 2)}`;
+
+  const synthesisKey = `analysis:${documentKey}:${plan.maxChars}:synthesis`;
+  const cachedSynthesis = await loadAiCheckpoint<Record<string, unknown>>(synthesisKey);
+  let synthesisData: Record<string, unknown>;
+  let synthesisModel: string;
+  if (cachedSynthesis) {
+    synthesisData = cachedSynthesis;
+    synthesisModel = asString(cachedSynthesis.modelId) || "cache";
+  } else {
+    const synthesis = await runJsonTask<Record<string, unknown>>({
+      task: "analysis",
+      system: TEACHER_SYSTEM,
+      prompt: synthesisPrompt,
+      schema: synthesisSchema,
+      options,
+    });
+    synthesisData = synthesis.data;
+    synthesisModel = synthesis.modelId;
+    attempts.push(...synthesis.attempts);
+    await saveAiCheckpoint(synthesisKey, { ...synthesis.data, modelId: synthesis.modelId });
+    await pruneAiCheckpoints();
+  }
+
+  const paragraphs = partials
+    .flatMap((partial) => asRecordArray(partial.paragraphs))
+    .map((item) => ({ content: asString(item.content), role: asString(item.role) }))
+    .filter((item) => item.content.trim())
+    .map((item, index) => ({ index: index + 1, content: item.content, role: item.role }));
+
+  const sentenceMap = new Map<string, { text: string; note: string }>();
+  for (const partial of partials) {
+    for (const item of asRecordArray(partial.keySentences)) {
+      const text = asString(item.text).trim();
+      if (text && !sentenceMap.has(text)) sentenceMap.set(text, { text, note: asString(item.note) });
+    }
+  }
+
+  const analysis: PassageAnalysis = {
+    topic: asString(synthesisData.topic),
+    gist: asString(synthesisData.gist),
+    title: asString(synthesisData.title) || title || "제목 없음",
+    oneLineSummary: asString(synthesisData.oneLineSummary),
+    thesis: asString(synthesisData.thesis),
+    keyEvidence: uniqueStrings(partials.flatMap((partial) => asStringArray(partial.keyEvidence))).slice(0, 8),
+    keySentences: [...sentenceMap.values()].slice(0, 8),
+    paragraphs,
+    structureLabel: asString(synthesisData.structureLabel).trim() || null,
+    structureSteps: asStringArray(synthesisData.structureSteps),
+    modelId: synthesisModel,
+    createdAt: nowIso(),
+    chunkCount: total,
+  };
+
+  return { analysis, modelId: synthesisModel, attempts };
 }
 
 export async function createEasyExplanation(

@@ -132,6 +132,11 @@ export interface PassageSource {
   name: string;
   kind: "text" | "txt" | "pdf" | "image";
   addedAt: string;
+  /** Optional attachment metadata; older projects simply omit it. */
+  size?: number;
+  pages?: number;
+  method?: string;
+  chars?: number;
 }
 
 export interface Passage {
@@ -168,6 +173,8 @@ export interface PassageAnalysis {
   modelId: string;
   createdAt: string;
   editedAt?: string;
+  /** Number of chunks the passage was split into (>1 for long documents). */
+  chunkCount?: number;
 }
 
 export interface ConceptExplanation {

@@ -130,15 +130,19 @@ export function normalizeProject(raw: unknown): QProject {
       }))
     : [createPage()];
 
+  const rawPassage = data.passage as Partial<QProject["passage"]>;
+  const passage: QProject["passage"] = {
+    title: typeof rawPassage.title === "string" ? rawPassage.title : "",
+    text: typeof rawPassage.text === "string" ? rawPassage.text : "",
+    language: rawPassage.language === "ko" || rawPassage.language === "en" ? rawPassage.language : "auto",
+    sources: Array.isArray(rawPassage.sources) ? rawPassage.sources : [],
+    ocrNotes: Array.isArray(rawPassage.ocrNotes) ? rawPassage.ocrNotes : [],
+  };
+
   return {
-    ...createProject(String(data.name ?? "불러온 프로젝트"), {
-      title: "",
-      text: "",
-      language: "auto",
-      sources: [],
-      ocrNotes: [],
-    }),
+    ...createProject(String(data.name ?? "불러온 프로젝트"), passage),
     ...(data as QProject),
+    passage,
     pages,
     settings: { ...defaultSettings(), ...(data.settings ?? {}) },
     updatedAt: data.updatedAt ?? nowIso(),

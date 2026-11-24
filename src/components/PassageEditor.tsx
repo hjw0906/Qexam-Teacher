@@ -3,7 +3,7 @@ import { FileText, Maximize2, Sparkles } from "lucide-react";
 import { Badge, Button, Card, Field, Input, SectionHeader, Select, Textarea } from "./ui";
 import { useProjectStore } from "../store/projectStore";
 import { useAiStore } from "../store/aiStore";
-import { detectLanguage, formatDateTime } from "../lib/utils";
+import { detectLanguage, formatBytes, formatDateTime } from "../lib/utils";
 import type { Passage } from "../lib/types";
 
 export function PassageEditor() {
@@ -84,7 +84,7 @@ export function PassageEditor() {
             <Field
               label="원문"
               className="mt-4"
-              hint="AI 분석은 앞부분 약 14,000자까지 사용합니다. 원문은 저장 시 그대로 보존됩니다."
+              hint="원문은 저장 시 그대로 보존됩니다. 긴 지문은 문단 경계에서 나누어 순차 분석한 뒤 하나의 결과로 합칩니다."
             >
               <Textarea
                 value={passage.text}
@@ -102,6 +102,11 @@ export function PassageEditor() {
                     <span key={`${source.name}-${index}`} className="chip bg-slate-100 text-slate-600">
                       <FileText className="h-3 w-3" />
                       {source.name}
+                      {source.method ? <span className="text-slate-400">· {source.method}</span> : null}
+                      {source.pages ? <span className="text-slate-400">· {source.pages}p</span> : null}
+                      {source.size ? (
+                        <span className="text-slate-400">· {formatBytes(source.size)}</span>
+                      ) : null}
                       <span className="text-slate-400">{formatDateTime(source.addedAt)}</span>
                     </span>
                   ))}

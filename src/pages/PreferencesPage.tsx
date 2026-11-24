@@ -14,7 +14,7 @@ import { loadPreferences, savePreferences } from "../lib/storage";
 import type { AppPreferences, PageSizeId } from "../lib/types";
 import { getWorkspaceDir } from "../lib/tauri";
 import { toast } from "../store/uiStore";
-import { terminateOcr } from "../lib/ocr";
+import { terminateOcr } from "../lib/ingest/recognize";
 
 export function PreferencesPage() {
   const [prefs, setPrefs] = useState<AppPreferences>(() => loadPreferences());
